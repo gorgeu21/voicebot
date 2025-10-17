@@ -1,18 +1,15 @@
 """
-Text processing module using OpenAI GPT for summarization and task extraction
-Handles summary generation, task extraction, and text analysis
+Text processing module using OpenRouter API for summarization and task extraction
+Handles summary generation, task extraction, and text analysis with fallback support
 """
 import logging
 from typing import Dict, Any
-from openai import AsyncOpenAI
-from config import OPENAI_API_KEY, CHAT_MODEL, TEMPERATURE, MAX_TEXT_LENGTH
+from openrouter_client import create_chat_completion
+from config import CHAT_MODEL, TEMPERATURE, MAX_TEXT_LENGTH, MAX_TOKENS
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Initialize OpenAI client
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 class TextProcessor:
     """Handles text processing using OpenAI GPT models"""
@@ -30,9 +27,9 @@ class TextProcessor:
         truncated = text[:self.max_text_length - 100]  # Leave space for truncation message
         return f"{truncated}\n\n[ТЕКСТ ОБРЕЗАН - СЛИШКОМ ДЛИННЫЙ]"
     
-    async def _call_openai(self, prompt: str, system_message: str = None) -> Dict[str, Any]:
+    async def _call_ai_api(self, prompt: str, system_message: str = None) -> Dict[str, Any]:
         """
-        Make a call to OpenAI API with error handling
+        Make a call to OpenRouter API with fallback support
         
         Args:
             prompt: User prompt to send
@@ -49,28 +46,39 @@ class TextProcessor:
             
             messages.append({"role": "user", "content": prompt})
             
-            response = await client.chat.completions.create(
-                model=self.model,
+            # Call OpenRouter API with fallback
+            response = await create_chat_completion(
                 messages=messages,
+                model=self.model,
                 temperature=self.temperature,
-                max_tokens=1500  # Reasonable limit for responses
+                max_tokens=MAX_TOKENS
             )
             
-            content = response.choices[0].message.content
-            
-            return {
-                "success": True,
-                "content": content,
-                "model": self.model,
-                "tokens_used": response.usage.total_tokens if response.usage else 0
-            }
+            if response["success"]:
+                return {
+                    "success": True,
+                    "content": response["content"],
+                    "model": response.get("model", self.model),
+                    "provider": response.get("provider", "unknown"),
+                    "tokens_used": response.get("tokens_used", 0),
+                    "input_tokens": response.get("input_tokens", 0),
+                    "output_tokens": response.get("output_tokens", 0)
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": response.get("error", "Unknown API error"),
+                    "content": "",
+                    "provider": response.get("provider", "unknown")
+                }
             
         except Exception as e:
-            logger.error(f"OpenAI API call failed: {str(e)}")
+            logger.error(f"AI API call failed: {str(e)}")
             return {
                 "success": False,
                 "error": str(e),
-                "content": ""
+                "content": "",
+                "provider": "unknown"
             }
     
     async def generate_summary_by_roles(self, text: str) -> Dict[str, Any]:
