@@ -1,0 +1,229 @@
+"""
+Text processing module using OpenAI GPT for summarization and task extraction
+Handles summary generation, task extraction, and text analysis
+"""
+import logging
+from typing import Dict, Any
+from openai import AsyncOpenAI
+from config import OPENAI_API_KEY, CHAT_MODEL, TEMPERATURE, MAX_TEXT_LENGTH
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Initialize OpenAI client
+client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+class TextProcessor:
+    """Handles text processing using OpenAI GPT models"""
+    
+    def __init__(self):
+        self.max_text_length = MAX_TEXT_LENGTH
+        self.model = CHAT_MODEL
+        self.temperature = TEMPERATURE
+    
+    def _truncate_text(self, text: str) -> str:
+        """Truncate text if it exceeds maximum length"""
+        if len(text) <= self.max_text_length:
+            return text
+        
+        truncated = text[:self.max_text_length - 100]  # Leave space for truncation message
+        return f"{truncated}\n\n[ТЕКСТ ОБРЕЗАН - СЛИШКОМ ДЛИННЫЙ]"
+    
+    async def _call_openai(self, prompt: str, system_message: str = None) -> Dict[str, Any]:
+        """
+        Make a call to OpenAI API with error handling
+        
+        Args:
+            prompt: User prompt to send
+            system_message: Optional system message
+            
+        Returns:
+            Dictionary with response or error
+        """
+        try:
+            messages = []
+            
+            if system_message:
+                messages.append({"role": "system", "content": system_message})
+            
+            messages.append({"role": "user", "content": prompt})
+            
+            response = await client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=1500  # Reasonable limit for responses
+            )
+            
+            content = response.choices[0].message.content
+            
+            return {
+                "success": True,
+                "content": content,
+                "model": self.model,
+                "tokens_used": response.usage.total_tokens if response.usage else 0
+            }
+            
+        except Exception as e:
+            logger.error(f"OpenAI API call failed: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "content": ""
+            }
+    
+    async def generate_summary_by_roles(self, text: str) -> Dict[str, Any]:
+        """
+        Generate a summary of the text organized by speakers/roles
+        
+        Args:
+            text: Transcribed text with speaker markers
+            
+        Returns:
+            Dictionary with summary results
+        """
+        truncated_text = self._truncate_text(text)
+        
+        system_message = """Ты — помощник для анализа транскрибированных голосовых сообщений. 
+Твоя задача — создавать краткие, структурированные сводки."""
+        
+        prompt = f"""Вот транскрибированный текст голосового сообщения с маркировкой говорящих:
+
+{truncated_text}
+
+Создай краткую ОБЩУЮ СВОДКУ, которая включает:
+1. Ключевые моменты и темы обсуждения
+2. Основные договорённости или решения
+3. Важные выводы
+4. Вклад каждого говорящего
+
+Организуй сводку по ролям/говорящим, если в тексте несколько участников.
+Будь кратким, но информативным. Максимум 300 слов."""
+        
+        logger.info(f"Generating summary for text of {len(text)} characters")
+        
+        result = await self._call_openai(prompt, system_message)
+        
+        if result["success"]:
+            logger.info("Summary generated successfully")
+        
+        return result
+    
+    async def extract_tasks(self, text: str) -> Dict[str, Any]:
+        """
+        Extract tasks and action items from the text
+        
+        Args:
+            text: Transcribed text with speaker markers
+            
+        Returns:
+            Dictionary with extracted tasks
+        """
+        truncated_text = self._truncate_text(text)
+        
+        system_message = """Ты — помощник для извлечения задач и действий из текста. 
+Ты должен находить конкретные, выполнимые задачи."""
+        
+        prompt = f"""Вот транскрибированный текст голосового сообщения:
+
+{truncated_text}
+
+Извлеки из текста ВСЕ ЗАДАЧИ И ДЕЙСТВИЯ, которые нужно выполнить:
+
+Формат ответа:
+📋 **ЗАДАЧИ И ДЕЙСТВИЯ:**
+
+• **[Исполнитель]** - Описание задачи
+• **[Исполнитель]** - Описание задачи
+...
+
+Если исполнитель не указан явно, используй **[Не указан]**.
+Если задач нет, напиши: "❌ Конкретных задач в сообщении не обнаружено."
+
+Ищи:
+- Прямые поручения ("сделай", "подготовь", "отправь")
+- Обязательства ("я сделаю", "мне нужно")
+- Планы ("нужно", "необходимо", "следует")
+- Дедлайны и временные рамки"""
+        
+        logger.info(f"Extracting tasks from text of {len(text)} characters")
+        
+        result = await self._call_openai(prompt, system_message)
+        
+        if result["success"]:
+            logger.info("Tasks extracted successfully")
+        
+        return result
+    
+    async def format_full_text(self, text: str) -> Dict[str, Any]:
+        """
+        Format the full transcribed text for better readability
+        
+        Args:
+            text: Transcribed text with speaker markers
+            
+        Returns:
+            Dictionary with formatted text
+        """
+        try:
+            # Simple formatting - add headers and clean up
+            formatted_text = f"""📝 **ПОЛНАЯ ТРАНСКРИПЦИЯ**
+
+{text}
+
+---
+💡 *Транскрибировано с помощью AI. Возможны неточности.*"""
+            
+            return {
+                "success": True,
+                "content": formatted_text,
+                "original_length": len(text),
+                "formatted_length": len(formatted_text)
+            }
+            
+        except Exception as e:
+            logger.error(f"Text formatting failed: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "content": text
+            }
+    
+    def get_text_stats(self, text: str) -> Dict[str, Any]:
+        """
+        Get statistics about the text
+        
+        Args:
+            text: Input text
+            
+        Returns:
+            Dictionary with text statistics
+        """
+        words = text.split()
+        lines = text.split('\n')
+        
+        return {
+            "characters": len(text),
+            "words": len(words),
+            "lines": len(lines),
+            "within_limits": len(text) <= self.max_text_length,
+            "speakers_detected": text.count("**Говорящий"),
+            "estimated_reading_time": max(1, len(words) // 200)  # ~200 words per minute
+        }
+
+# Global processor instance
+processor = TextProcessor()
+
+# Convenience functions
+async def generate_summary(text: str) -> Dict[str, Any]:
+    """Generate summary by roles"""
+    return await processor.generate_summary_by_roles(text)
+
+async def extract_action_items(text: str) -> Dict[str, Any]:
+    """Extract tasks and action items"""
+    return await processor.extract_tasks(text)
+
+async def format_transcript(text: str) -> Dict[str, Any]:
+    """Format full transcript"""
+    return await processor.format_full_text(text)
