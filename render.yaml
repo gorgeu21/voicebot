@@ -17,4 +17,3 @@ services:
       - key: OPENAI_API_KEY
         sync: false
     healthCheckPath: "/"
-    maxShutdownDelaySeconds: 30
